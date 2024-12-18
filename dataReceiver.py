@@ -25,6 +25,7 @@ async def upload_data(upload: DataUpload):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"data/upload_{timestamp}.json"
         
+        print(upload.data)
         # Write data to file
         with open(filename, 'w') as f:
             json.dump(upload.data, f, indent=4)
