@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any
 import json
@@ -20,6 +21,13 @@ Path("data").mkdir(exist_ok=True)
 
 app = FastAPI(title="Simple Data Receiver")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 # Generate a random API key - you should save this somewhere secure
 API_KEY_NAME = "X-API-Key"
 API_KEY = os.getenv("API_KEY")
@@ -54,7 +62,7 @@ async def upload_data(upload: DataUpload, api_key: str = Depends(get_api_key)):
         print("\n----PARSED DATA----")
         print(json.dumps(parse_data(upload.data), indent=2))
         print("----------------------")
-        
+
         logger.info(f"Data written and sent")
         
         return {
