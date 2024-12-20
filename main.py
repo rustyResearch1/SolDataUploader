@@ -11,6 +11,13 @@ import logging
 import secrets
 import os
 import re
+from pymongo import MongoClient
+
+# MongoDB setup
+MONGO_URI = os.getenv("MONGO_URI")  # You'll get this from MongoDB Atlas
+client = MongoClient(MONGO_URI)
+db = client['your_database_name']
+collection = db['data_logs']
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +34,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
-)
+)  
 # Generate a random API key - you should save this somewhere secure
 API_KEY_NAME = "X-API-Key"
 API_KEY = os.getenv("API_KEY")
@@ -52,13 +59,22 @@ async def upload_data(upload: DataUpload, api_key: str = Depends(get_api_key)):
     try:
         # Create filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"data/upload_{timestamp}.json"
+        # filename = f"data/upload_{timestamp}.json"
         
+        document = {
+            "timestamp": datetime.utcnow(),
+            "data": upload.data,
+            "raw_data": str(upload.data)  # Store raw string just in case
+        }
+
         # Write data to file
         #with open(filename, 'w') as f:
             #json.dump(upload.data, f, indent=4)
         print("----RAW DATA RECEIVED----")
         print(json.dumps(upload.data, indent=2))
+
+        result = collection.insert_one(document)
+        
         print("\n----PARSED DATA----")
         print(json.dumps(parse_data(upload.data), indent=2))
         print("----------------------")
@@ -67,7 +83,7 @@ async def upload_data(upload: DataUpload, api_key: str = Depends(get_api_key)):
         
         return {
             "status": "success",
-            "filename": filename,
+            "id": str(result.inserted_id),
             "message": "Data saved successfully"
         }
         
@@ -75,6 +91,55 @@ async def upload_data(upload: DataUpload, api_key: str = Depends(get_api_key)):
         error_msg = f"Error saving data: {str(e)}"
         logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/feed", response_class=HTMLResponse)
+async def get_feed():
+    """Return recent entries as HTML"""
+    try:
+        # Get latest 50 entries from MongoDB
+        entries = list(collection.find().sort("timestamp", -1).limit(50))
+        
+        # Generate HTML
+        html_content = """
+        <div class="feed-container">
+        """
+        
+        for entry in entries:
+            # Get the data from MongoDB document
+            data = entry.get('data', {})
+            parsed = parse_data({'data': data})  # Wrap in same structure as before
+            content_type = parsed.get("parsed", {}).get("type", "unknown")
+            
+            if content_type == "tool_call":
+                html_content += f"""
+                <div class="entry tool-call">
+                    <div class="timestamp">{entry['timestamp'].isoformat()}</div>
+                    <div class="function">Function: {parsed['parsed']['function_name']}</div>
+                    <div class="arguments">Arguments: {json.dumps(parsed['parsed']['arguments'], indent=2)}</div>
+                </div>
+                """
+            elif content_type == "text_content":
+                html_content += f"""
+                <div class="entry text-content">
+                    <div class="timestamp">{entry['timestamp'].isoformat()}</div>
+                    <div class="text">{parsed['parsed']['text']}</div>
+                </div>
+                """
+            else:
+                # Fallback for unknown types - just show raw data
+                html_content += f"""
+                <div class="entry unknown">
+                    <div class="timestamp">{entry['timestamp'].isoformat()}</div>
+                    <div class="raw">{json.dumps(data, indent=2)}</div>
+                </div>
+                """
+        
+        html_content += "</div>"
+        return HTMLResponse(content=html_content)
+        
+    except Exception as e:
+        print(f"Error generating feed: {e}")  # Print to Railway logs
+        return HTMLResponse(content=f"<div>Error loading feed: {str(e)}</div>")
 
 
 def parse_tool_call(data: str) -> Dict[str, Any]:
@@ -130,54 +195,6 @@ def parse_data(data: Dict[str, Any]) -> Dict[str, Any]:
         parsed_data["parsed"] = {"type": "unknown", "raw": content}
     
     return parsed_data
-
-@app.get("/feed", response_class=HTMLResponse)
-async def get_feed():
-    """Return recent entries as HTML"""
-    try:
-        # Get last 50 entries
-        entries = []
-        data_files = sorted(Path("data").glob("upload_*.json"), reverse=True)[:50]
-        
-        for file in data_files:
-            try:
-                with open(file, 'r') as f:
-                    data = json.load(f)
-                    entries.append(data)
-            except Exception as e:
-                logger.error(f"Error reading file {file}: {e}")
-        
-        # Generate HTML
-        html_content = """
-        <div class="feed-container">
-        """
-        
-        for entry in entries:
-            parsed = parse_data(entry)
-            content_type = parsed.get("parsed", {}).get("type", "unknown")
-            
-            if content_type == "tool_call":
-                html_content += f"""
-                <div class="entry tool-call">
-                    <div class="timestamp">{parsed['timestamp']}</div>
-                    <div class="function">Function: {parsed['parsed']['function_name']}</div>
-                    <div class="arguments">Arguments: {json.dumps(parsed['parsed']['arguments'], indent=2)}</div>
-                </div>
-                """
-            elif content_type == "text_content":
-                html_content += f"""
-                <div class="entry text-content">
-                    <div class="timestamp">{parsed['timestamp']}</div>
-                    <div class="text">{parsed['parsed']['text']}</div>
-                </div>
-                """
-        
-        html_content += "</div>"
-        return HTMLResponse(content=html_content)
-        
-    except Exception as e:
-        logger.error(f"Error generating feed: {e}")
-        return HTMLResponse(content=f"<div>Error loading feed: {str(e)}</div>")
 
 if __name__ == "__main__":
     import uvicorn
