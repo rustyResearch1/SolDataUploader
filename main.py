@@ -47,10 +47,15 @@ async def upload_data(upload: DataUpload, api_key: str = Depends(get_api_key)):
         filename = f"data/upload_{timestamp}.json"
         
         # Write data to file
-        with open(filename, 'w') as f:
-            json.dump(upload.data, f, indent=4)
+        #with open(filename, 'w') as f:
+            #json.dump(upload.data, f, indent=4)
+        print("----RAW DATA RECEIVED----")
+        print(json.dumps(upload.data, indent=2))
+        print("\n----PARSED DATA----")
+        print(json.dumps(parse_data(upload.data), indent=2))
+        print("----------------------")
         
-        logger.info(f"Data written to {filename}")
+        logger.info(f"Data written and sent")
         
         return {
             "status": "success",
