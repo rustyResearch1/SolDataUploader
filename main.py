@@ -161,7 +161,7 @@ def parse_data(data: Dict[str, Any]) -> Dict[str, Any]:
             "content": f"Error parsing data: {str(e)}",
             "category": "error"
         }
-        
+
 @app.get("/feed", response_class=HTMLResponse)
 async def get_feed():
     """Return recent entries as HTML"""
@@ -221,7 +221,7 @@ async def get_feed():
             }.get(category_class, '-- LOG:')
             
             html_content += f"""
-            <div class="entry {category_class}">
+            <div class="entry {category_class} log-entry">
                 <div class="timestamp">[{parsed['timestamp']}]</div>
                 <div class="content">
                     <span class="prefix">{prefix}</span> {parsed['content']}
