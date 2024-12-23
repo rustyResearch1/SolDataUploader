@@ -11,6 +11,7 @@ import logging
 import secrets
 import os
 import re
+from datetime import datetime
 from pymongo import MongoClient
 
 # MongoDB setup
@@ -92,55 +93,148 @@ async def upload_data(upload: DataUpload, api_key: str = Depends(get_api_key)):
         logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
 
+def parse_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse the different types of data we receive and extract meaningful content"""
+    try:
+        timestamp = data.get('timestamp', datetime.now().isoformat())
+        content_data = data.get('data', {})
+        
+        # Check for status updates
+        if 'status' in content_data:
+            return {
+                "type": "status",
+                "timestamp": timestamp,
+                "content": content_data['status'].replace('_', ' ').strip(),
+                "category": "system_status"
+            }
+            
+        # Check for messages - extract actual text content
+        elif 'messages' in content_data:
+            message = content_data['messages']
+            # Extract text between value=" and the next quote or end
+            value_match = re.search(r'value="([^"]*)', message)
+            text = value_match.group(1) if value_match else message
+            return {
+                "type": "message",
+                "timestamp": timestamp,
+                "content": text.strip(),
+                "category": "ai_response"
+            }
+            
+        # Check for tool calls - extract call ID and function name
+        elif 'tool_calls' in content_data:
+            tool_call = content_data['tool_calls']
+            # Extract call ID
+            call_id = re.search(r"id='([^']*)'", tool_call)
+            call_id = call_id.group(1) if call_id else None
+            
+            # Extract function name (if present)
+            function_match = re.search(r"function='([^']*)'", tool_call)
+            function_name = function_match.group(1) if function_match else None
+            
+            content = f"Tool Call: {call_id}"
+            if function_name:
+                content += f" (Function: {function_name})"
+                
+            return {
+                "type": "tool_call",
+                "timestamp": timestamp,
+                "content": content,
+                "call_id": call_id,
+                "function": function_name,
+                "category": "system_action"
+            }
+            
+        # Handle unknown data types
+        return {
+            "type": "unknown",
+            "timestamp": timestamp,
+            "content": str(content_data),
+            "category": "unknown"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error parsing data: {e}")
+        return {
+            "type": "error",
+            "timestamp": timestamp,
+            "content": f"Error parsing data: {str(e)}",
+            "category": "error"
+        }
+        
 @app.get("/feed", response_class=HTMLResponse)
 async def get_feed():
     """Return recent entries as HTML"""
     try:
-        # Get latest 50 entries from MongoDB
         entries = list(collection.find().sort("timestamp", -1).limit(50))
         
-        # Generate HTML
         html_content = """
+        <style>
+            .feed-container {
+                font-family: 'Courier New', monospace;
+                padding: 20px;
+                background: #0a0a0a;
+                color: #33ff33;
+            }
+            .entry {
+                margin-bottom: 15px;
+                padding: 10px;
+                border-left: 3px solid #33ff33;
+                background: rgba(0, 255, 0, 0.05);
+            }
+            .timestamp {
+                color: #666;
+                font-size: 0.8em;
+            }
+            .content {
+                margin-top: 5px;
+            }
+            .system_action {
+                color: #00ffff;
+                border-left-color: #00ffff;
+            }
+            .system_status {
+                color: #ff9900;
+                border-left-color: #ff9900;
+            }
+            .error {
+                color: #ff3333;
+                border-left-color: #ff3333;
+            }
+            .prefix {
+                opacity: 0.7;
+            }
+        </style>
         <div class="feed-container">
         """
         
         for entry in entries:
-            # Get the data from MongoDB document
-            data = entry.get('data', {})
-            parsed = parse_data({'data': data})  # Wrap in same structure as before
-            content_type = parsed.get("parsed", {}).get("type", "unknown")
+            parsed = parse_data(entry)
+            category_class = parsed.get('category', 'unknown')
             
-            if content_type == "tool_call":
-                html_content += f"""
-                <div class="entry tool-call">
-                    <div class="timestamp">{entry['timestamp'].isoformat()}</div>
-                    <div class="function">Function: {parsed['parsed']['function_name']}</div>
-                    <div class="arguments">Arguments: {json.dumps(parsed['parsed']['arguments'], indent=2)}</div>
+            prefix = {
+                'ai_response': '>> AI:',
+                'system_action': '## SYS:',
+                'system_status': '!! STATUS:',
+                'error': '** ERROR:',
+                'unknown': '?? LOG:'
+            }.get(category_class, '-- LOG:')
+            
+            html_content += f"""
+            <div class="entry {category_class}">
+                <div class="timestamp">[{parsed['timestamp']}]</div>
+                <div class="content">
+                    <span class="prefix">{prefix}</span> {parsed['content']}
                 </div>
-                """
-            elif content_type == "text_content":
-                html_content += f"""
-                <div class="entry text-content">
-                    <div class="timestamp">{entry['timestamp'].isoformat()}</div>
-                    <div class="text">{parsed['parsed']['text']}</div>
-                </div>
-                """
-            else:
-                # Fallback for unknown types - just show raw data
-                html_content += f"""
-                <div class="entry unknown">
-                    <div class="timestamp">{entry['timestamp'].isoformat()}</div>
-                    <div class="raw">{json.dumps(data, indent=2)}</div>
-                </div>
-                """
+            </div>
+            """
         
         html_content += "</div>"
         return HTMLResponse(content=html_content)
         
     except Exception as e:
-        print(f"Error generating feed: {e}")  # Print to Railway logs
+        print(f"Error generating feed: {e}")
         return HTMLResponse(content=f"<div>Error loading feed: {str(e)}</div>")
-
 
 def parse_tool_call(data: str) -> Dict[str, Any]:
     """Parse tool call data"""
@@ -178,23 +272,6 @@ def parse_text_content(data: str) -> Dict[str, Any]:
         logger.error(f"Error parsing text content: {e}")
         return {"type": "text_content", "error": str(e), "raw": data}
 
-def parse_data(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Main parsing function"""
-    parsed_data = {
-        "timestamp": datetime.now().isoformat(),
-        "original_data": data
-    }
-    
-    # Check the content and parse accordingly
-    content = str(data.get("data", ""))
-    if "RequiredActionFunctionToolCall" in content:
-        parsed_data["parsed"] = parse_tool_call(content)
-    elif "TextContentBlock" in content:
-        parsed_data["parsed"] = parse_text_content(content)
-    else:
-        parsed_data["parsed"] = {"type": "unknown", "raw": content}
-    
-    return parsed_data
 
 if __name__ == "__main__":
     import uvicorn
