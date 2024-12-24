@@ -100,13 +100,13 @@ def parse_data(data: Dict[str, Any]) -> Dict[str, Any]:
         content_data = data.get('data', {})
         
         # Check for status updates
-        if 'status' in content_data:
-            return {
-                "type": "status",
-                "timestamp": timestamp,
-                "content": content_data['status'].replace('_', ' ').strip(),
-                "category": "system_status"
-            }
+        ###if 'status' in content_data:
+            #return {
+              #  "type": "status",
+            #    "timestamp": timestamp,
+            #    "content": content_data['status'].replace('_', ' ').strip(),
+            #    "category": "system_status"
+           # }
             
         # Check for messages - extract actual text content
         elif 'messages' in content_data:
